@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         .collect();
     let mut stream = create_palidator_slot_stream(&pub_sub, Arc::new(schedule)).await?;
     while let Some(slot) = stream.next().await {
-        println!("{:?}", slot);
+        println!("stream got {:?}", slot);
     }
 
     Ok(())
