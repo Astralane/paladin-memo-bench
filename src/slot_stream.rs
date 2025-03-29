@@ -26,7 +26,7 @@ pub async fn create_palidator_slot_stream<'a>(
                     Some(slot) => {
                         if slot > last_slot_cl.load(Ordering::Relaxed) {
                             last_slot_cl.store(slot, Ordering::Relaxed);
-                            if !schedule_cl.contains(&slot) {
+                            if schedule_cl.contains(&slot) {
                                 return Some(slot);
                             }
                         }
