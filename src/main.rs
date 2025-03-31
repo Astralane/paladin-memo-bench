@@ -68,6 +68,10 @@ async fn main() -> anyhow::Result<()> {
     info!("blockhash initial update complete");
 
     let schedule_map = serde_json::from_str::<HashMap<String, Vec<u64>>>(&body)?;
+    let reverse_map = schedule_map
+        .iter()
+        .flat_map(|(k, vec)| vec.iter().map(move |&v| (v, k.to_owned())))
+        .collect::<HashMap<_, _>>();
 
     let schedule = schedule_map
         .values()
@@ -124,13 +128,16 @@ async fn main() -> anyhow::Result<()> {
     let statuses = rpc.get_signature_statuses(&signatures).await?.value;
 
     let mut diffs = Vec::new();
+    let mut not_landed_slots = Vec::new();
     let mut total_landed = 0;
     for (status, signature) in statuses.iter().zip(&signatures) {
         let send_slot = *signatures_map.get(signature).unwrap();
         if let Some(landed_slot) = status.as_ref().map(|s| s.slot) {
             total_landed += 1;
             diffs.push(landed_slot - send_slot);
+            continue;
         }
+        not_landed_slots.push(send_slot);
     }
 
     info!(
@@ -138,7 +145,13 @@ async fn main() -> anyhow::Result<()> {
         total_landed,
         signatures.len()
     );
-
     info!("slot latencies: {:?}", diffs);
+
+    let not_landed_validators = not_landed_slots
+        .iter()
+        .map(|slot| reverse_map.get(slot).unwrap().clone())
+        .collect::<Vec<_>>();
+
+    info!("not landed valdiators {:?}", not_landed_validators);
     Ok(())
 }
