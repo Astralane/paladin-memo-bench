@@ -82,7 +82,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mut stream = create_palidator_slot_stream(&pub_sub, Arc::new(schedule))
         .await?
-        .take_until(Box::pin(tokio::time::sleep(Duration::from_secs(config.duration_mins * 60))));
+        .take_until(Box::pin(tokio::time::sleep(Duration::from_secs(
+            config.duration_mins * 60,
+        ))));
 
     let mut handles = Vec::new();
 
@@ -91,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
     while let Some(slot) = stream.next().await {
         let signer = signer.clone();
         let sender = sender.clone();
-        let _rpc  = rpc.clone();
+        let _rpc = rpc.clone();
         let block_hash = {
             let lock = block_hash.read().unwrap();
             lock.unwrap()
@@ -128,14 +130,14 @@ async fn main() -> anyhow::Result<()> {
     let signatures = signatures_map.keys().cloned().collect::<Vec<_>>();
     let statuses = rpc.get_signature_statuses(&signatures).await?.value;
 
-    let mut diffs = Vec::new();
+    let mut slot_latencies = Vec::new();
     let mut not_landed_slots = Vec::new();
     let mut total_landed = 0;
     for (status, signature) in statuses.iter().zip(&signatures) {
         let send_slot = *signatures_map.get(signature).unwrap();
         if let Some(landed_slot) = status.as_ref().map(|s| s.slot) {
             total_landed += 1;
-            diffs.push(landed_slot - send_slot);
+            slot_latencies.push(landed_slot - send_slot);
             continue;
         }
         not_landed_slots.push(send_slot);
@@ -146,13 +148,22 @@ async fn main() -> anyhow::Result<()> {
         total_landed,
         signatures.len()
     );
-    info!("slot latencies: {:?}", diffs);
+
+    if !slot_latencies.is_empty() {
+        let average_latency =
+            slot_latencies.iter().sum::<u64>() as f64 / slot_latencies.len() as f64;
+        info!("avg latencies: {:?}", average_latency);
+    } else {
+        info!("no transaction landed!")
+    }
+
+    info!("not landed slots: {:?}", not_landed_slots);
 
     let not_landed_validators = not_landed_slots
         .iter()
         .map(|slot| reverse_map.get(slot).unwrap().clone())
         .collect::<Vec<_>>();
 
-    info!("not landed valdiators {:?}", not_landed_validators);
+    info!("not landed validators {:?}", not_landed_validators);
     Ok(())
 }
