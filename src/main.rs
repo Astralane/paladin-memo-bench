@@ -22,7 +22,7 @@ pub struct Config {
     http_rpc: String,
     keypair_path: String,
     paladin_rpc: String,
-    num_leaders: usize,
+    duration_mins: u64,
     cu_price_micro_lamports: u64,
 }
 
@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut stream = create_palidator_slot_stream(&pub_sub, Arc::new(schedule))
         .await?
-        .take(config.num_leaders);
+        .take_until(Box::pin(tokio::time::sleep(Duration::from_secs(config.duration_mins * 60))));
 
     let mut handles = Vec::new();
 
@@ -91,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
     while let Some(slot) = stream.next().await {
         let signer = signer.clone();
         let sender = sender.clone();
+        let _rpc  = rpc.clone();
         let block_hash = {
             let lock = block_hash.read().unwrap();
             lock.unwrap()
