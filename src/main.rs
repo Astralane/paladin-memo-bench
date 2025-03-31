@@ -11,7 +11,7 @@ use solana_sdk::signature::{EncodableKey, Keypair, Signature};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 mod memo_tx;
 mod slot_stream;
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut handles = Vec::new();
 
-    info!("running stream");
+    info!("memo bench started ...");
     let cu_price = config.cu_price_micro_lamports;
     while let Some(slot) = stream.next().await {
         let signer = signer.clone();
@@ -154,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
             slot_latencies.iter().sum::<u64>() as f64 / slot_latencies.len() as f64;
         info!("avg latencies: {:?}", average_latency);
     } else {
-        info!("no transaction landed!")
+        warn!("no transaction landed!")
     }
 
     info!("not landed slots: {:?}", not_landed_slots);
