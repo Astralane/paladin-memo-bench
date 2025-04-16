@@ -128,7 +128,14 @@ async fn main() -> anyhow::Result<()> {
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
     let signatures = signatures_map.keys().cloned().collect::<Vec<_>>();
-    let statuses = rpc.get_signature_statuses(&signatures).await?.value;
+    let mut statuses = Vec::new();
+
+    // call the signatures in chunks of 10
+    for sig_batch in signatures.chunks(10){
+        let mut status_batch = rpc.get_signature_statuses(&sig_batch).await?.value;
+        statuses.append(&mut status_batch);
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 
     let mut slot_latencies = Vec::new();
     let mut not_landed_slots = Vec::new();
