@@ -10,7 +10,7 @@ pub async fn create_palidator_slot_stream<'a>(
     pubsub_client: &'a PubsubClient,
     schedule: Arc<HashSet<u64>>,
 ) -> anyhow::Result<BoxStream<'a, u64>> {
-    let (mut stream, _unsub) = pubsub_client.slot_updates_subscribe().await?;
+    let (stream, _unsub) = pubsub_client.slot_updates_subscribe().await?;
     let last_slot = Arc::new(AtomicU64::new(0));
     Ok(stream
         .filter_map(move |update| {

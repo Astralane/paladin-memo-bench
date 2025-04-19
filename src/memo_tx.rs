@@ -1,5 +1,5 @@
+use rand::Rng;
 use rand::distributions::Alphanumeric;
-use rand::{Rng, random};
 use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey;

@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::pubsub_client::PubsubClient;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_api::config::RpcSendTransactionConfig;
+use solana_sdk::clock::Slot;
 use solana_sdk::signature::{EncodableKey, Keypair, Signature};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::{info, warn};
@@ -80,25 +81,83 @@ async fn main() -> anyhow::Result<()> {
         .cloned()
         .collect();
 
+    let (sig_sender, mut sig_recv) = tokio::sync::mpsc::channel::<(Signature, Slot)>(500);
+
     let mut stream = create_palidator_slot_stream(&pub_sub, Arc::new(schedule))
         .await?
         .take_until(Box::pin(tokio::time::sleep(Duration::from_secs(
             config.duration_mins * 60,
         ))));
 
-    let mut handles = Vec::new();
+    let recv_hdl = tokio::spawn(async move {
+        let mut total_landed = 0;
+        let mut signatures_total: Vec<Signature> = Vec::new();
+        let mut slot_latencies = Vec::new();
+        let mut not_landed_slots = Vec::new();
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let mut buffer = Vec::with_capacity(20);
+            let cnt = sig_recv.recv_many(&mut buffer, 20).await;
+            if cnt == 0 {
+                break;
+            }
+            let signatures = buffer.iter().map(|item| item.0.clone()).collect::<Vec<_>>();
+            signatures_total.extend(&signatures);
 
+            //give some time for all the signatures to be confirmed
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            if let Ok(response) = rpc.get_signature_statuses(&signatures).await {
+                let statuses = response.value;
+                for (status, signature) in statuses.iter().zip(&signatures) {
+                    let send_slot = buffer.iter().find(|item| item.0 == *signature).unwrap().1;
+                    if let Some(landed_slot) = status.as_ref().map(|s| s.slot) {
+                        total_landed += 1;
+                        slot_latencies.push(landed_slot - send_slot);
+                        continue;
+                    }
+                    not_landed_slots.push(send_slot);
+                }
+            }
+            info!("total landed slots: {}", total_landed);
+            info!("total send slots: {}", slot_latencies.len());
+        }
+
+        info!(
+            "total landed / total sent: {}/{}",
+            total_landed,
+            signatures_total.len()
+        );
+
+        if !slot_latencies.is_empty() {
+            let average_latency =
+                slot_latencies.iter().sum::<u64>() as f64 / slot_latencies.len() as f64;
+            info!("avg latencies: {:?}", average_latency);
+        } else {
+            warn!("no transaction landed!")
+        }
+
+        info!("not landed slots: {:?}", not_landed_slots);
+
+        let not_landed_validators = not_landed_slots
+            .iter()
+            .map(|slot| reverse_map.get(slot).unwrap().clone())
+            .collect::<Vec<_>>();
+
+        info!("not landed validators {:?}", not_landed_validators);
+    });
+
+    let mut handles = Vec::new();
     info!("memo bench started ...");
     let cu_price = config.cu_price_micro_lamports;
+
     while let Some(slot) = stream.next().await {
         let signer = signer.clone();
         let sender = sender.clone();
-        let _rpc = rpc.clone();
         let block_hash = {
             let lock = block_hash.read().unwrap();
             lock.unwrap()
         };
-
+        let sig_sender_cl = sig_sender.clone();
         let hdl = tokio::spawn(async move {
             let tx = rand_memo_tx(&signer, cu_price, block_hash, "TESTING");
             let sig = sender
@@ -111,66 +170,20 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await
                 .unwrap();
+            sig_sender_cl.send((sig, slot)).await.unwrap();
             println!("sig: {:?}", sig);
-            (sig, slot)
         });
         handles.push(hdl);
     }
 
     info!("calculating results...");
-    let mut signatures_map = HashMap::new();
     for handle in handles {
-        let (sig, slot) = handle.await?;
-        signatures_map.insert(sig, slot);
+        handle.await?;
     }
 
     //wait 10 seconds for confirmation of all txns
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-
-    let signatures = signatures_map.keys().cloned().collect::<Vec<_>>();
-    let mut statuses = Vec::new();
-
-    // call the signatures in chunks of 10
-    for sig_batch in signatures.chunks(10){
-        let mut status_batch = rpc.get_signature_statuses(&sig_batch).await?.value;
-        statuses.append(&mut status_batch);
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-
-    let mut slot_latencies = Vec::new();
-    let mut not_landed_slots = Vec::new();
-    let mut total_landed = 0;
-    for (status, signature) in statuses.iter().zip(&signatures) {
-        let send_slot = *signatures_map.get(signature).unwrap();
-        if let Some(landed_slot) = status.as_ref().map(|s| s.slot) {
-            total_landed += 1;
-            slot_latencies.push(landed_slot - send_slot);
-            continue;
-        }
-        not_landed_slots.push(send_slot);
-    }
-
-    info!(
-        "total landed / total sent: {}/{}",
-        total_landed,
-        signatures.len()
-    );
-
-    if !slot_latencies.is_empty() {
-        let average_latency =
-            slot_latencies.iter().sum::<u64>() as f64 / slot_latencies.len() as f64;
-        info!("avg latencies: {:?}", average_latency);
-    } else {
-        warn!("no transaction landed!")
-    }
-
-    info!("not landed slots: {:?}", not_landed_slots);
-
-    let not_landed_validators = not_landed_slots
-        .iter()
-        .map(|slot| reverse_map.get(slot).unwrap().clone())
-        .collect::<Vec<_>>();
-
-    info!("not landed validators {:?}", not_landed_validators);
+    drop(sig_sender);
+    recv_hdl.await?;
     Ok(())
 }
